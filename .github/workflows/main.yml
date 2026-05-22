@@ -81,7 +81,7 @@ jobs:
           choco install vb-cable -y --no-progress --ignore-checksums --ignore-package-exit-codes
           
           # Bulk install (Choco handles locking internally — faster than sequential)
-          choco install googlechrome brave discord obs-studio ffmpeg captura `
+          choco install googlechrome brave discord obs-studio ffmpeg captura vlc `
             -y --no-progress --ignore-checksums --ignore-package-exit-codes
           
           # --- Fix Brave to Public ---
