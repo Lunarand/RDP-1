@@ -20,8 +20,8 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fEnableAutoReconnect" -Value 1 -Force
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          netsh advfirewall firewall delete rule name="RDP-Bore" 2>$null
+          netsh advfirewall firewall add rule name="RDP-Bore" dir=in action=allow protocol=TCP localport=3389
           sc failure TermService reset=86400 actions=restart/5000/restart/10000/restart/30000
           Restart-Service -Name TermService -Force
 
@@ -34,9 +34,15 @@ jobs:
             exit 1
           }
           $securePass = ConvertTo-SecureString $env:MY_SECRET_PASS -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          try {
+            New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          } catch {
+            Write-Error "Failed to create user: $_"
+            exit 1
+          }
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          net user RDP $env:MY_SECRET_PASS
           Write-Host "RDP user created successfully."
 
       - name: Optimize System
@@ -58,24 +64,14 @@ jobs:
           choco install googlechrome brave discord obs-studio ffmpeg vlc `
             microsoft-windows-terminal python313 thonny `
             -y --no-progress --ignore-checksums --ignore-package-exit-codes
-
-          # Refresh PATH so python/pip are found immediately
           $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-
-          # Create scripts folder — drop your .py files here over RDP
           New-Item -ItemType Directory -Path "C:\scripts" -Force | Out-Null
-
           Write-Host "Apps installed."
 
       - name: Install All Pip Packages
         run: |
-          # Refresh PATH
           $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-
-          # Upgrade pip first
           python -m pip install --upgrade pip
-
-          # Helper function — never crashes, just skips failed packages
           function Install-Pip($pkg) {
             Write-Host "Installing $pkg ..."
             pip install $pkg 2>&1 | Out-Null
@@ -85,62 +81,31 @@ jobs:
               Write-Host "  [SKIP] $pkg  (not on PyPI or already built-in)"
             }
           }
-
-          # ---- Every single package from your original pipinstall.py ----
-
-          Install-Pip "OneClick"
+          Install-Pip "oneclick"
           Install-Pip "stdiomask"
           Install-Pip "user-agent"
           Install-Pip "instaloader"
           Install-Pip "requests"
           Install-Pip "rich"
-          Install-Pip "telebot"
-          Install-Pip "python-cfonts"
+          Install-Pip "pyTelegramBotAPI"
           Install-Pip "pyfiglet"
-          Install-Pip "py_compile"
-          Install-Pip "socks"
           Install-Pip "PySocks"
-          Install-Pip "youtube_dl"
-          Install-Pip "uuid"
+          Install-Pip "yt-dlp"
           Install-Pip "colorama"
-          Install-Pip "BeautifulSoup"
-          Install-Pip "pafy"
+          Install-Pip "beautifulsoup4"
           Install-Pip "bs4"
-          Install-Pip "argparse"
-          Install-Pip "InstagramAPI"
-          Install-Pip "uuid4"
-          Install-Pip "generate-user-agent"
-          Install-Pip "token_hex"
-          Install-Pip "Fore"
-          Install-Pip "re"
           Install-Pip "selenium"
           Install-Pip "webdriver-manager"
-          Install-Pip "asmix"
-          Install-Pip "curl2pyreqs"
-          Install-Pip "pycountry"
-          Install-Pip "ms4"
-          Install-Pip "Topython"
-          Install-Pip "fake_useragent"
           Install-Pip "fake-useragent"
-          Install-Pip "mechaize"
-          Install-Pip "n"
-          Install-Pip "mm"
-          Install-Pip "new"
-          Install-Pip "sleep"
-          Install-Pip "b"
-          Install-Pip "string"
-          Install-Pip "secrets"
-          Install-Pip "webbrowser"
-          Install-Pip "hashlib"
-          Install-Pip "time"
-          Install-Pip "os"
-          Install-Pip "sys"
-          Install-Pip "json"
-          Install-Pip "random"
-          Install-Pip "datetime"
-          Install-Pip "threading"
-          Install-Pip "uuid"
-
+          Install-Pip "pycountry"
+          Install-Pip "curl2pyreqs"
+          Install-Pip "asmix"
+          Install-Pip "pafy"
+          Install-Pip "instagrapi"
+          Install-Pip "generate-user-agent"
+          Install-Pip "python-cfonts"
+          Install-Pip "mechanize"
+          Install-Pip "uuid4"
           Write-Host ""
           Write-Host "===== Successfully installed packages ====="
           pip list
@@ -233,12 +198,36 @@ jobs:
           Remove-Item $boreZip -Force
           $boreExe = "$boreDir\bore.exe"
 
+          function Start-Bore($boreExe, $logFile) {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $boreExe
+            $psi.Arguments = "local 3389 --to bore.pub"
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $proc = New-Object System.Diagnostics.Process
+            $proc.StartInfo = $psi
+            $outHandler = { if ($Event.SourceEventArgs.Data) { Add-Content -Path $logFile -Value $Event.SourceEventArgs.Data } }
+            $errHandler = { if ($Event.SourceEventArgs.Data) { Add-Content -Path $logFile -Value $Event.SourceEventArgs.Data } }
+            Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action $outHandler | Out-Null
+            Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived  -Action $errHandler | Out-Null
+            $proc.Start() | Out-Null
+            $proc.BeginOutputReadLine()
+            $proc.BeginErrorReadLine()
+            return $proc
+          }
+
           function Get-BoreAddress($logFile, $timeoutSec = 90) {
             $start = Get-Date
             while ((Get-Date) - $start -lt [TimeSpan]::FromSeconds($timeoutSec)) {
               if (Test-Path $logFile) {
-                $m = (Get-Content $logFile -Tail 20) | Select-String 'listening at (bore\.pub:\d+)'
-                if ($m) { return $m.Matches.Groups[1].Value }
+                $lines = Get-Content $logFile -ErrorAction SilentlyContinue
+                foreach ($line in $lines) {
+                  if ($line -match 'listening at .*(bore\.pub:\d+)') {
+                    return $matches[1]
+                  }
+                }
               }
               Start-Sleep -Seconds 1
             }
@@ -252,19 +241,19 @@ jobs:
             Write-Host ""
             Write-Host "=== Bore attempt $attempt / $maxRetries ==="
             $logFile = "$env:TEMP\bore_$attempt.log"
+            if (Test-Path $logFile) { Remove-Item $logFile -Force }
 
-            $proc = Start-Process -FilePath $boreExe `
-              -ArgumentList "local 3389 --to bore.pub" `
-              -NoNewWindow -RedirectStandardOutput $logFile -PassThru
-
+            $proc = Start-Bore -boreExe $boreExe -logFile $logFile
             $address = Get-BoreAddress -logFile $logFile -timeoutSec 90
 
             if ($address) {
               Write-Host ""
               Write-Host "============================================"
               Write-Host "  RDP ADDRESS : $address"
+              Write-Host "  Enter in RDP client as: $address"
               Write-Host "  USERNAME    : RDP"
               Write-Host "  PASSWORD    : (your secret PASS)"
+              Write-Host "  NOTE: Include port e.g. bore.pub:XXXXX"
               Write-Host "============================================"
               Write-Host ""
               $delay = 10
@@ -279,6 +268,8 @@ jobs:
               }
             } else {
               Write-Warning "Could not get bore address (attempt $attempt)."
+              Write-Host "Log contents:"
+              if (Test-Path $logFile) { Get-Content $logFile }
               if ($proc -and !$proc.HasExited) { $proc.Kill() }
               Write-Host "Retrying in ${delay}s..."
               Start-Sleep -Seconds $delay
