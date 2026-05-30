@@ -71,21 +71,28 @@ jobs:
             exit 1
           }
 
-          # --- Download & prepare zrok using authenticated CLI to avoid rate limits ---
+          # --- Download & prepare zrok using authenticated CLI ---
           $zrokDir = "$env:TEMP\zrok"
           New-Item -ItemType Directory -Force -Path $zrokDir | Out-Null
           
           Write-Host "Fetching latest zrok release..."
-          gh release download --repo openziti/zrok --pattern "*windows_amd64.zip" --dir $zrokDir
           
-          $zrokZip = Get-ChildItem -Path $zrokDir -Filter "*windows_amd64.zip" | Select-Object -First 1
-          if (-not $zrokZip) {
-            Write-Error "Failed to download zrok zip file."
+          # OpenZiti occasionally packages as .tar.gz instead of .zip. This targets both.
+          gh release download --repo openziti/zrok --pattern "*windows_amd64.zip" --pattern "*windows_amd64.tar.gz" --dir $zrokDir
+          
+          $zrokArchive = Get-ChildItem -Path $zrokDir -Filter "*windows_amd64*" | Select-Object -First 1
+          if (-not $zrokArchive) {
+            Write-Error "Failed to download zrok zip/tar file."
             exit 1
           }
           
-          Expand-Archive $zrokZip.FullName -DestinationPath $zrokDir -Force
-          Remove-Item $zrokZip.FullName -Force
+          # Extract dynamically based on format
+          if ($zrokArchive.Name.EndsWith(".zip")) {
+            Expand-Archive $zrokArchive.FullName -DestinationPath $zrokDir -Force
+          } else {
+            tar -xf $zrokArchive.FullName -C $zrokDir
+          }
+          
           $zrokExe = "$zrokDir\zrok.exe"
 
           # --- Enable zrok ---
@@ -163,4 +170,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Triggering next workflow run to restart the server..."
-          gh workflow run main.yml --ref ${{ github.ref_name }}
+          # Adding --repo bypasses the need for a .git checkout folder
+          gh workflow run "${{ github.workflow }}" --repo ${{ github.repository }} --ref ${{ github.ref_name }}
